@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: #12151c;
+    color: #e8ecf1;
+    font-family: system-ui, "Segoe UI", sans-serif;
+    user-select: none;
+  }
+  .game {
+    padding: 20px;
+    text-align: center;
+  }
+  .hud {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #9aa4b2;
+  }
+  .hud strong { color: #e8ecf1; font-size: 20px; }
+  .board-wrap {
+    position: relative;
+    width: min(80vw, 80vh, 420px);
+    aspect-ratio: 1;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #171b24;
+    border: 1px solid #2a303c;
+    border-radius: 12px;
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    gap: 12px;
+    background: rgba(18, 21, 28, 0.78);
+    border-radius: 12px;
+    backdrop-filter: blur(3px);
+  }
+  .overlay[hidden] { display: none; }
+  .overlay h2 { margin: 0; font-size: 22px; font-weight: 600; }
+  .overlay p { margin: 0; color: #9aa4b2; font-size: 14px; }
+  button {
+    padding: 9px 22px;
+    border: 0;
+    border-radius: 8px;
+    background: #4ade80;
+    color: #0f172a;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #6ee7a0; }
+  .hint { margin-top: 12px; font-size: 12px; color: #667085; }
+</style>
+</head>
+<body>
+<div class="game">
+  <div class="hud">
+    <span>得分 <strong id="score">0</strong></span>
+    <span>最高 <strong id="best">0</strong></span>
+  </div>
+  <div class="board-wrap">
+    <canvas id="board"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="overlay-title">贪吃蛇</h2>
+      <p id="overlay-text">方向键 / WASD 控制，空格暂停</p>
+      <button id="start-btn">开始游戏</button>
+    </div>
+  </div>
+  <div class="hint">方向键 / WASD 移动 · 空格暂停 · 回车重开</div>
+</div>
+
+<script>
+const COLS = 20, ROWS = 20, CELL = 20, TICK = 180;
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlay-title');
+const overlayText = document.getElementById('overlay-text');
+const startBtn = document.getElementById('start-btn');
+
+// 按设备像素比缩放，保证高清
+const dpr = window.devicePixelRatio || 1;
+canvas.width = COLS * CELL * dpr;
+canvas.height = ROWS * CELL * dpr;
+ctx.scale(dpr, dpr);
+
+let snake, dir, queue, food, score, best, timer, state;
+
+best = Number(localStorage.getItem('snake-best') || 0);
+bestEl.textContent = best;
+
+function reset() {
+  snake = [{ x: 9, y: 10 }, { x: 8, y: 10 }, { x: 7, y: 10 }];
+  dir = { x: 1, y: 0 };
+  queue = [];
+  score = 0;
+  scoreEl.textContent = 0;
+  placeFood();
+  draw();
+}
+
+function placeFood() {
+  const free = [];
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (!snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+    }
+  }
+  food = free[Math.floor(Math.random() * free.length)];
+}
+
+function start() {
+  reset();
+  state = 'playing';
+  overlay.hidden = true;
+  clearInterval(timer);
+  timer = setInterval(tick, TICK);
+}
+
+function pause() {
+  if (state === 'playing') {
+    state = 'paused';
+    clearInterval(timer);
+    overlayTitle.textContent = '已暂停';
+    overlayText.textContent = '按空格或点击按钮继续';
+    startBtn.textContent = '继续';
+    overlay.hidden = false;
+  } else if (state === 'paused') {
+    state = 'playing';
+    startBtn.textContent = '开始游戏';
+    overlay.hidden = true;
+    timer = setInterval(tick, TICK);
+  }
+}
+
+function gameOver() {
+  state = 'over';
+  clearInterval(timer);
+  if (score > best) {
+    best = score;
+    localStorage.setItem('snake-best', best);
+    bestEl.textContent = best;
+  }
+  overlayTitle.textContent = '游戏结束';
+  overlayText.textContent = `得分 ${score} · 按回车重新开始`;
+  startBtn.textContent = '再来一局';
+  overlay.hidden = false;
+}
+
+function tick() {
+  if (queue.length) dir = queue.shift();
+
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  const eating = head.x === food.x && head.y === food.y;
+
+  // 撞墙或撞到自己（不吃食物时尾巴会移开，所以排除最后一节）
+  const hitWall = head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS;
+  const hitSelf = snake.slice(0, eating ? snake.length : -1)
+    .some(s => s.x === head.x && s.y === head.y);
+  if (hitWall || hitSelf) return gameOver();
+
+  snake.unshift(head);
+
+  if (eating) {
+    score += 10;
+    scoreEl.textContent = score;
+    if (snake.length === COLS * ROWS) return gameOver();
+    placeFood();
+  } else {
+    snake.pop();
+  }
+
+  draw();
+}
+
+function draw() {
+  ctx.fillStyle = '#171b24';
+  ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+
+  // 棋盘格
+  ctx.fillStyle = 'rgba(255,255,255,0.025)';
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if ((x + y) % 2 === 0) ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+    }
+  }
+
+  // 食物
+  drawCell(food.x, food.y, '#f87171', 4);
+
+  // 蛇
+  snake.forEach((s, i) => {
+    drawCell(s.x, s.y, i === 0 ? '#86efac' : '#4ade80', 3);
+  });
+}
+
+function drawCell(x, y, color, inset) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(x * CELL + inset, y * CELL + inset, CELL - inset * 2, CELL - inset * 2, 5);
+  ctx.fill();
+}
+
+document.addEventListener('keydown', e => {
+  const keys = {
+    ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 },
+    ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 },
+    w: { x: 0, y: -1 }, s: { x: 0, y: 1 },
+    a: { x: -1, y: 0 }, d: { x: 1, y: 0 },
+  };
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+  if (key === ' ') {
+    e.preventDefault();
+    if (state === 'playing' || state === 'paused') pause();
+    else start();
+    return;
+  }
+  if (key === 'Enter' && state !== 'playing') {
+    start();
+    return;
+  }
+
+  const next = keys[key];
+  if (!next || state !== 'playing') return;
+  e.preventDefault();
+
+  // 以队列中最后一个方向为准，避免快速按键导致反向
+  const last = queue.length ? queue[queue.length - 1] : dir;
+  if (next.x === -last.x && next.y === -last.y) return;
+  if (next.x === last.x && next.y === last.y) return;
+  if (queue.length < 2) queue.push(next);
+});
+
+startBtn.addEventListener('click', () => {
+  if (state === 'paused') pause();
+  else start();
+});
+
+reset();
+</script>
+</body>
+</html>
